@@ -1,0 +1,11 @@
+{
+  "appId": "com.luckydevil.app",
+  "appName": "LuckyDevil",
+  "webDir": "www",
+  "backgroundColor": "#0a0605",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}
