@@ -58,6 +58,42 @@ jobs:
       - name: Iconos y pantalla de inicio (si falla, se usa el icono por defecto)
         continue-on-error: true
         run: npx @capacitor/assets generate --android
+      - name: Icono sin fondo (se genera aquí mismo, con el dibujo recortado)
+        run: |
+          pip install --quiet pillow numpy opencv-python-headless
+          cat > hacer_iconos.py <<'PYEOF'
+          import os, numpy as np, cv2
+          from PIL import Image
+          orig = 'assets/icon-only.png' if os.path.exists('assets/icon-only.png') else 'icon-only.png'
+          im = Image.open(orig).convert('RGBA'); a = np.array(im)
+          print('icono de origen:', orig, im.size, '| ya tiene transparencia:', bool(a[..., 3].min() < 250))
+          if a[..., 3].min() >= 250:  # tiene fondo negro: se recorta el dibujo
+              src = cv2.cvtColor(a[..., :3], cv2.COLOR_RGB2BGR); mx = src.max(axis=2).astype(np.float32)
+              dark = (mx < 40).astype(np.uint8); n, lab = cv2.connectedComponents(dark, connectivity=4)
+              borde = set(lab[0, :]) | set(lab[-1, :]) | set(lab[:, 0]) | set(lab[:, -1]); borde.discard(0)
+              bg = np.isin(lab, list(borde)) & (dark == 1)
+              band = cv2.dilate(bg.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (41, 41))) > 0
+              alpha = np.ones(mx.shape, np.float32); alpha = np.where(band & ~bg, np.clip((mx - 40) / 100, 0, 1), alpha); alpha[bg] = 0
+              b, g, r = [src[..., i].astype(np.float32) for i in range(3)]; alpha[band & ~bg & (mx < 110) & (b >= r * 0.8)] = 0
+              alpha = cv2.GaussianBlur(alpha, (0, 0), 1.1); a3 = np.clip(alpha, 0.04, 1)[..., None]
+              col = np.where(alpha[..., None] < 0.999, np.clip(src.astype(np.float32) / a3, 0, 255), src.astype(np.float32))
+              im = Image.fromarray(cv2.cvtColor(np.dstack([col.astype(np.uint8), (alpha * 255).astype(np.uint8)]), cv2.COLOR_BGRA2RGBA))
+              print('fondo negro eliminado')
+          art = im.crop(im.getbbox())
+          def lienzo(lado, tam):
+              c = Image.new('RGBA', (lado, lado), (0, 0, 0, 0)); k = tam / max(art.size)
+              r = art.resize((max(1, round(art.width * k)), max(1, round(art.height * k))), Image.LANCZOS); c.alpha_composite(r, ((lado - r.width) // 2, (lado - r.height) // 2)); return c
+          res = 'android/app/src/main/res'
+          for d, (leg, fg) in {'mdpi': (48, 108), 'hdpi': (72, 162), 'xhdpi': (96, 216), 'xxhdpi': (144, 324), 'xxxhdpi': (192, 432)}.items():
+              os.makedirs(f'{res}/mipmap-{d}', exist_ok=True)
+              for nombre in ('ic_launcher', 'ic_launcher_round'): lienzo(leg, round(leg * 0.94)).save(f'{res}/mipmap-{d}/{nombre}.png')
+              lienzo(fg, round(fg * 0.70)).save(f'{res}/mipmap-{d}/ic_launcher_foreground.png')
+          os.makedirs(f'{res}/mipmap-anydpi-v26', exist_ok=True)
+          xml = '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@android:color/transparent"/>\n    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>\n'
+          for nombre in ('ic_launcher', 'ic_launcher_round'): open(f'{res}/mipmap-anydpi-v26/{nombre}.xml', 'w').write(xml)
+          print('iconos generados con fondo transparente:', sorted(os.listdir(f'{res}/mipmap-xxxhdpi')))
+          PYEOF
+          python3 hacer_iconos.py
       - name: Copiar la app al proyecto
         run: npx cap sync android
       - name: Compilar el APK
