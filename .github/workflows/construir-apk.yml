@@ -26,10 +26,32 @@ jobs:
         run: npx cap add android
       - name: Clave de firma fija (así las actualizaciones se instalan encima sin desinstalar)
         run: |
-          if [ -f debug.keystore ]; then
-            mkdir -p ~/.android
-            cp debug.keystore ~/.android/debug.keystore
+          if [ ! -f debug.keystore ]; then
+            echo "FALTA el archivo debug.keystore en la raíz del repositorio. Súbelo y vuelve a ejecutar."
+            exit 1
           fi
+          mkdir -p ~/.android
+          cp debug.keystore ~/.android/debug.keystore
+          python3 - <<'PY'
+          p = 'android/app/build.gradle'
+          s = open(p, encoding='utf-8').read()
+          cfg = '''
+              signingConfigs {
+                  debug {
+                      storeFile file('../../debug.keystore')
+                      storePassword 'android'
+                      keyAlias 'androiddebugkey'
+                      keyPassword 'android'
+                  }
+              }
+          '''
+          if 'storeFile file' not in s:
+              s = s.replace('android {', 'android {' + cfg, 1)
+              open(p, 'w', encoding='utf-8').write(s)
+          print('Gradle configurado con la clave fija:', 'storeFile file' in open(p, encoding='utf-8').read())
+          PY
+          echo "Huella de la clave fija:"
+          keytool -list -v -keystore debug.keystore -storepass android | grep -i "SHA-256" | head -1
       - name: Pantalla de inicio negra y sin icono pequeño (Android 12 o superior)
         continue-on-error: true
         run: |
@@ -101,6 +123,10 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug
+      - name: Huella de la firma del APK (debe ser siempre la misma)
+        run: |
+          APKSIGNER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner | sort | tail -1)
+          "$APKSIGNER" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | grep -i "SHA-256" | head -1
       - name: Guardar el APK
         uses: actions/upload-artifact@v4
         with:
